@@ -8,3 +8,5 @@ __pycache__/
 logs/*.log
 state/*.json
 state/run.lock
+deploy/systemd/trading.env
+.env

@@ -149,15 +149,23 @@ def _write_pnl_log(base_dir: Path, ts: str, positions: dict[str, Any], prices: d
 def _record_violation(base_dir: Path, ts: str, reasons: list[str]) -> None:
     append_jsonl(base_dir / "logs" / "violations.log", {"timestamp": ts, "reasons": reasons})
 
-def _build_portfolio_snapshot(ts: str, positions: dict[str, Any]) -> dict[str, Any]:
+def _build_portfolio_snapshot(ts: str, positions: dict[str, Any], prices: dict[str, float]) -> dict[str, Any]:
     stock_items: list[dict[str, Any]] = []
     crypto_items: list[dict[str, Any]] = []
     for asset, pos in positions.items():
+        qty = float(pos.get("qty", 0.0))
+        avg = float(pos.get("avg_price", 0.0))
+        px = float(prices.get(asset, avg))
+        unrealized = (px - avg) * qty
+        if pos.get("side") == "short":
+            unrealized = -unrealized
         item = {
             "asset": asset,
             "side": pos.get("side", "long"),
-            "qty": pos.get("qty", 0.0),
-            "avg_price": pos.get("avg_price", 0.0),
+            "qty": qty,
+            "avg_price": avg,
+            "mark_price": px,
+            "unrealized_pnl": round(unrealized, 4),
             "stop_price": pos.get("stop_price", 0.0),
             "status": pos.get("status", "open"),
             "signal_type": pos.get("signal_type", "unknown"),
@@ -172,6 +180,45 @@ def _build_portfolio_snapshot(ts: str, positions: dict[str, Any]) -> dict[str, A
         "crypto": crypto_items,
         "total_positions": len(stock_items) + len(crypto_items),
     }
+
+
+def _build_performance_snapshot(
+    base_dir: Path,
+    ts: str,
+    config: dict[str, Any],
+    system_state: dict[str, Any],
+    positions: dict[str, Any],
+    prices: dict[str, float],
+    trades: list[dict[str, Any]],
+) -> dict[str, Any]:
+    initial_cash = float(config["capital"]["initial_cash"])
+    cash = float(system_state.get("cash", initial_cash))
+    realized = round(sum(float(t.get("pnl", 0.0)) for t in trades), 4)
+    unrealized_val = 0.0
+    for asset, pos in positions.items():
+        qty = float(pos.get("qty", 0.0))
+        avg = float(pos.get("avg_price", 0.0))
+        px = float(prices.get(asset, avg))
+        pnl = (px - avg) * qty
+        if pos.get("side") == "short":
+            pnl = -pnl
+        unrealized_val += pnl
+    unrealized = round(unrealized_val, 4)
+    total_pnl = round(realized + unrealized, 4)
+    equity = round(initial_cash + total_pnl, 4)
+    return_pct = round((total_pnl / initial_cash) * 100, 4) if initial_cash > 0 else 0.0
+    snapshot = {
+        "timestamp": ts,
+        "initial_cash": initial_cash,
+        "cash": round(cash, 4),
+        "equity": round(equity, 4),
+        "realized_pnl": realized,
+        "unrealized_pnl": unrealized,
+        "total_pnl": total_pnl,
+        "return_pct": return_pct,
+    }
+    append_jsonl(base_dir / "logs" / "performance.log", snapshot)
+    return snapshot
 
 
 def _publish_signals(
@@ -345,7 +392,16 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
         pending_orders.extend(newly_filled)
         system_state["last_heartbeat"] = ts
 
-        portfolio = _build_portfolio_snapshot(ts, positions)
+        portfolio = _build_portfolio_snapshot(ts, positions, prices)
+        performance = _build_performance_snapshot(
+            base_dir=base_dir,
+            ts=ts,
+            config=config,
+            system_state=system_state,
+            positions=positions,
+            prices=prices,
+            trades=trades,
+        )
         save_positions(base_dir, positions)
         save_portfolio(base_dir, portfolio)
         save_idempotency(base_dir, idempotency)
@@ -364,6 +420,7 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             "telegram_sent": int(notify_result.get("sent", 0)),
             "drift_warning": drift.get("warning", "unknown"),
             "portfolio": portfolio,
+            "performance": performance,
         }
     finally:
         release_lock(base_dir, fd)
@@ -382,7 +439,8 @@ def main() -> None:
         f"[요약] 신규진입허용={result['allow_new_entries']} "
         f"안전모드={result['safe_mode']} "
         f"포트폴리오수={result['portfolio']['total_positions']} "
-        f"텔레그램전송={result['telegram_sent']}"
+        f"텔레그램전송={result['telegram_sent']} "
+        f"누적수익률={result['performance']['return_pct']}%"
     )
 
 

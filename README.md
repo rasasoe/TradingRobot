@@ -22,6 +22,7 @@ python3 orchestrator.py --base-dir . --config config/config.yaml
 python3 orchestrator.py --base-dir . --config config/config.yaml --emit-signals
 ```
 출력은 한글 요약과 함께 현재 포트폴리오를 포함합니다.
+출력에 누적 수익률(`performance.return_pct`)이 포함됩니다.
 
 ### Telegram Setup
 1. Telegram에서 `@BotFather` 열기
@@ -67,6 +68,7 @@ pytest -q
 - ENFORCEMENT 실패 시 신규 진입 차단(Fail-Closed), 기존 포지션 관리만 허용됩니다.
 - 매수(enter) 체결 시 포트폴리오에 자동 반영되고, 매도(exit) 체결 시 자동 제거됩니다.
 - 포트폴리오 스냅샷은 `state/portfolio.json`에 저장됩니다.
+- 수익률/실현손익/미실현손익은 `logs/performance.log`와 실행 출력에 기록됩니다.
 
 ### Raspberry Pi 3 (systemd)
 ```bash
@@ -76,4 +78,10 @@ nano deploy/systemd/trading.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now trading
 sudo systemctl status trading
+```
+
+### Raspberry Pi 3 One-Command Setup
+```bash
+chmod +x deploy/pi3_quickstart.sh
+./deploy/pi3_quickstart.sh
 ```
