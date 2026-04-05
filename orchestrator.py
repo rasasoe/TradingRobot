@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,20 +12,30 @@ from config.settings import load_config
 from data.mock_data import make_mock_snapshot, validate_snapshot_sync
 from engines.crypto_engine import run_crypto_engine
 from engines.stock_engine import run_stock_engine
+from execution.notifier import (
+    format_risk_alert,
+    format_signal_alert,
+    format_system_alert,
+    send_telegram_message,
+)
 from execution.runner import execute_orders
 from risk.drift import evaluate_drift
 from state.store import (
     append_jsonl,
     ensure_state_files,
+    load_alert_idempotency,
     load_capital_events,
     load_idempotency,
     load_pending_orders,
+    load_portfolio,
     load_positions,
     load_system_state,
     load_trades,
     save_idempotency,
     save_pending_orders,
+    save_portfolio,
     save_positions,
+    save_alert_idempotency,
     save_system_state,
     save_trades,
 )
@@ -137,8 +149,116 @@ def _write_pnl_log(base_dir: Path, ts: str, positions: dict[str, Any], prices: d
 def _record_violation(base_dir: Path, ts: str, reasons: list[str]) -> None:
     append_jsonl(base_dir / "logs" / "violations.log", {"timestamp": ts, "reasons": reasons})
 
+def _build_portfolio_snapshot(ts: str, positions: dict[str, Any]) -> dict[str, Any]:
+    stock_items: list[dict[str, Any]] = []
+    crypto_items: list[dict[str, Any]] = []
+    for asset, pos in positions.items():
+        item = {
+            "asset": asset,
+            "side": pos.get("side", "long"),
+            "qty": pos.get("qty", 0.0),
+            "avg_price": pos.get("avg_price", 0.0),
+            "stop_price": pos.get("stop_price", 0.0),
+            "status": pos.get("status", "open"),
+            "signal_type": pos.get("signal_type", "unknown"),
+        }
+        if pos.get("engine") == "stock":
+            stock_items.append(item)
+        else:
+            crypto_items.append(item)
+    return {
+        "timestamp": ts,
+        "stock": stock_items,
+        "crypto": crypto_items,
+        "total_positions": len(stock_items) + len(crypto_items),
+    }
 
-def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml") -> dict[str, Any]:
+
+def _publish_signals(
+    base_dir: Path,
+    timestamp: str,
+    signals: list[dict[str, Any]],
+    allow_new_entries: bool,
+    block_reason: str,
+    config: dict[str, Any],
+    emit_console_override: bool,
+) -> int:
+    output_cfg = config.get("signal_output", {})
+    emit_log = bool(output_cfg.get("emit_log", True))
+    emit_console = bool(output_cfg.get("emit_console", False) or emit_console_override)
+
+    emitted = 0
+    for sig in signals:
+        status = "candidate"
+        if sig.get("action") == "enter" and not allow_new_entries:
+            status = f"blocked:{block_reason or 'fail_closed'}"
+        payload = {
+            "timestamp": timestamp,
+            "engine": sig.get("engine", "unknown"),
+            "asset": sig.get("asset", "unknown"),
+            "action": sig.get("action", "unknown"),
+            "side": sig.get("side", "unknown"),
+            "signal_type": sig.get("signal_type", "unknown"),
+            "price": sig.get("price", 0.0),
+            "score": sig.get("score", 0.0),
+            "reason": sig.get("reason", ""),
+            "status": status,
+        }
+        if emit_log:
+            append_jsonl(base_dir / "logs" / "signals.log", payload)
+        if emit_console:
+            print(json.dumps(payload, ensure_ascii=True))
+        emitted += 1
+    return emitted
+
+
+def _notify_telegram(
+    config: dict[str, Any],
+    signals: list[dict[str, Any]],
+    allow_new_entries: bool,
+    block_reason: str,
+    reasons: list[str],
+    drift_warning: str,
+    alert_idempotency: dict[str, Any],
+) -> dict[str, Any]:
+    notif = config.get("notifications", {}).get("telegram", {})
+    if not bool(notif.get("enabled", False)):
+        return {"sent": 0, "seen": alert_idempotency.get("seen", [])}
+
+    bot_token = str(notif.get("bot_token", ""))
+    chat_id = str(notif.get("chat_id", ""))
+    seen = set(alert_idempotency.get("seen", []))
+    sent = 0
+
+    if reasons and bool(notif.get("send_system_alerts", True)):
+        if send_telegram_message(bot_token, chat_id, format_system_alert(reasons)):
+            sent += 1
+
+    if drift_warning == "drift_detected" and bool(notif.get("send_risk_alerts", True)):
+        if send_telegram_message(bot_token, chat_id, format_risk_alert(drift_warning)):
+            sent += 1
+
+    if bool(notif.get("send_signal_alerts", True)):
+        for sig in signals:
+            base = (
+                f"{sig.get('timestamp','')}|{sig.get('engine','')}|{sig.get('asset','')}|"
+                f"{sig.get('action','')}|{sig.get('side','')}|{sig.get('signal_type','')}|{sig.get('price',0)}"
+            )
+            sig_hash = hashlib.sha256(base.encode("utf-8")).hexdigest()
+            if sig_hash in seen:
+                continue
+            status = "candidate"
+            if sig.get("action") == "enter" and not allow_new_entries:
+                status = f"blocked:{block_reason or 'fail_closed'}"
+            if send_telegram_message(bot_token, chat_id, format_signal_alert(sig, status)):
+                sent += 1
+                seen.add(sig_hash)
+
+    alert_idempotency["seen"] = list(seen)
+    return {"sent": sent, "seen": alert_idempotency["seen"]}
+
+
+def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_signals: bool = False) -> dict[str, Any]:
     ensure_state_files(base_dir)
     config = load_config(base_dir, config_rel_path)
 
@@ -149,7 +269,9 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml") -> dic
         ts = snapshot["timestamp"]
 
         positions = load_positions(base_dir)
+        _ = load_portfolio(base_dir)
         idempotency = load_idempotency(base_dir)
+        alert_idempotency = load_alert_idempotency(base_dir)
         trades = load_trades(base_dir)
         pending_orders = load_pending_orders(base_dir)
         system_state = load_system_state(base_dir)
@@ -189,6 +311,24 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml") -> dic
             block_reason = "SAFE_MODE" if system_state.get("safe_mode", False) else ""
 
         all_signals = entry_signals + management_signals
+        emitted_signals = _publish_signals(
+            base_dir=base_dir,
+            timestamp=ts,
+            signals=all_signals,
+            allow_new_entries=allow_new_entries,
+            block_reason=block_reason,
+            config=config,
+            emit_console_override=emit_signals,
+        )
+        notify_result = _notify_telegram(
+            config=config,
+            signals=all_signals,
+            allow_new_entries=allow_new_entries,
+            block_reason=block_reason,
+            reasons=reasons,
+            drift_warning=drift.get("warning", "unknown"),
+            alert_idempotency=alert_idempotency,
+        )
         positions, idempotency, trades, newly_filled = execute_orders(
             base_dir=base_dir,
             signals=all_signals,
@@ -205,8 +345,11 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml") -> dic
         pending_orders.extend(newly_filled)
         system_state["last_heartbeat"] = ts
 
+        portfolio = _build_portfolio_snapshot(ts, positions)
         save_positions(base_dir, positions)
+        save_portfolio(base_dir, portfolio)
         save_idempotency(base_dir, idempotency)
+        save_alert_idempotency(base_dir, alert_idempotency)
         save_trades(base_dir, trades)
         save_pending_orders(base_dir, pending_orders)
         save_system_state(base_dir, system_state)
@@ -217,7 +360,10 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml") -> dic
             "violation_streak": system_state["violation_streak"],
             "safe_mode": bool(system_state.get("safe_mode", False)),
             "signals": len(all_signals),
+            "signals_emitted": emitted_signals,
+            "telegram_sent": int(notify_result.get("sent", 0)),
             "drift_warning": drift.get("warning", "unknown"),
+            "portfolio": portfolio,
         }
     finally:
         release_lock(base_dir, fd)
@@ -227,10 +373,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-asset separated trading orchestrator")
     parser.add_argument("--base-dir", default=".", help="Project base directory")
     parser.add_argument("--config", default="config/config.yaml", help="Config file path")
+    parser.add_argument("--emit-signals", action="store_true", help="Print generated signals to stdout")
     args = parser.parse_args()
 
-    result = run_once(Path(args.base_dir).resolve(), args.config)
-    print(result)
+    result = run_once(Path(args.base_dir).resolve(), args.config, emit_signals=args.emit_signals)
+    print(json.dumps(result, ensure_ascii=False))
+    print(
+        f"[요약] 신규진입허용={result['allow_new_entries']} "
+        f"안전모드={result['safe_mode']} "
+        f"포트폴리오수={result['portfolio']['total_positions']} "
+        f"텔레그램전송={result['telegram_sent']}"
+    )
 
 
 if __name__ == "__main__":

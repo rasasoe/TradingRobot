@@ -1,34 +1,44 @@
-mode: paper  # backtest | paper | live_small | live_full
-
+mode: paper
 capital:
   initial_cash: 100000.0
   max_total_exposure: 0.8
   max_single_position_equity_pct: 0.1
   base_risk_per_trade: 0.01
-
 stock:
   enabled: true
-  symbols: [AAPL, MSFT]
+  symbols:
+  - AAPL
+  - MSFT
   max_vix: 25.0
   no_trade_minutes_after_open: 30
-
 crypto:
   enabled: true
-  symbols: [BTCUSDT, ETHUSDT]
+  symbols:
+  - BTCUSDT
+  - ETHUSDT
   allow_short: true
-
 execution:
   spread_limit_pct: 0.5
   top3_orderbook_ratio_limit: 0.2
-
 drift:
   winrate_drop_threshold: 0.15
-  avg_r_drop_threshold: 0.20
-  vol_change_threshold: 0.30
+  avg_r_drop_threshold: 0.2
+  vol_change_threshold: 0.3
   r_reduction_factor: 0.5
   disable_strategies_on_drift:
-    - crypto_breakout
-
+  - crypto_breakout
 system:
   safe_mode_violation_streak: 3
   loop_seconds: 60
+signal_output:
+  emit_log: true
+  emit_console: false
+notifications:
+  telegram:
+    enabled: false
+    bot_username: tradingrasbot
+    bot_token: ""
+    chat_id: ""
+    send_signal_alerts: true
+    send_system_alerts: true
+    send_risk_alerts: true

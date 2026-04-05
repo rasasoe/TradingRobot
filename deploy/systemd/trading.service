@@ -1,0 +1,18 @@
+[Unit]
+Description=TradingRobot Orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/TradingRobot
+EnvironmentFile=/home/pi/TradingRobot/deploy/systemd/trading.env
+ExecStart=/home/pi/TradingRobot/.venv/bin/python /home/pi/TradingRobot/orchestrator.py --base-dir /home/pi/TradingRobot --config config/config.yaml --emit-signals
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/pi/TradingRobot/logs/service.log
+StandardError=append:/home/pi/TradingRobot/logs/service.err.log
+
+[Install]
+WantedBy=multi-user.target

@@ -27,7 +27,9 @@ def append_jsonl(path: Path, row: dict[str, Any]) -> None:
 def ensure_state_files(base_dir: Path) -> None:
     defaults = {
         "positions.json": {},
+        "portfolio.json": {"timestamp": None, "stock": [], "crypto": [], "total_positions": 0},
         "idempotency.json": {"seen": []},
+        "alert_idempotency.json": {"seen": []},
         "system_state.json": {
             "violation_streak": 0,
             "safe_mode": False,
@@ -53,12 +55,31 @@ def save_positions(base_dir: Path, positions: dict[str, Any]) -> None:
     _save_json(base_dir / "state" / "positions.json", positions)
 
 
+def load_portfolio(base_dir: Path) -> dict[str, Any]:
+    return _load_json(
+        base_dir / "state" / "portfolio.json",
+        {"timestamp": None, "stock": [], "crypto": [], "total_positions": 0},
+    )
+
+
+def save_portfolio(base_dir: Path, portfolio: dict[str, Any]) -> None:
+    _save_json(base_dir / "state" / "portfolio.json", portfolio)
+
+
 def load_idempotency(base_dir: Path) -> dict[str, Any]:
     return _load_json(base_dir / "state" / "idempotency.json", {"seen": []})
 
 
 def save_idempotency(base_dir: Path, idempotency: dict[str, Any]) -> None:
     _save_json(base_dir / "state" / "idempotency.json", idempotency)
+
+
+def load_alert_idempotency(base_dir: Path) -> dict[str, Any]:
+    return _load_json(base_dir / "state" / "alert_idempotency.json", {"seen": []})
+
+
+def save_alert_idempotency(base_dir: Path, idempotency: dict[str, Any]) -> None:
+    _save_json(base_dir / "state" / "alert_idempotency.json", idempotency)
 
 
 def load_system_state(base_dir: Path) -> dict[str, Any]:

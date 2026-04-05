@@ -95,6 +95,9 @@ def execute_orders(
                 base_risk=float(config["capital"]["base_risk_per_trade"]),
                 r_multiplier=float(system_state.get("r_multiplier", 1.0)),
             )
+            max_single_notional = equity * float(config["capital"]["max_single_position_equity_pct"])
+            if price > 0:
+                qty = min(qty, max_single_notional / price)
             notional = qty * price
             if qty <= 0 or not can_enter_position(equity, exposure, notional, config):
                 append_jsonl(base_dir / "logs" / "decisions.log", _decision_row(signal, False, "blocked:risk_limit"))
