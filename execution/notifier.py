@@ -51,3 +51,17 @@ def format_risk_alert(drift_warning: str) -> str:
         f"상태: {drift_warning}\n"
         "노출 축소 권고"
     )
+
+
+def format_portfolio_summary(portfolio: dict[str, Any], performance: dict[str, Any]) -> str:
+    stock_count = len(portfolio.get("stock", []))
+    crypto_count = len(portfolio.get("crypto", []))
+    total = int(portfolio.get("total_positions", 0))
+    return (
+        "[포트폴리오 현황]\n"
+        f"총 포지션: {total} (주식 {stock_count} / 코인 {crypto_count})\n"
+        f"누적수익률: {performance.get('return_pct', 0.0)}%\n"
+        f"총손익: {performance.get('total_pnl', 0.0)}\n"
+        f"실현손익: {performance.get('realized_pnl', 0.0)}\n"
+        f"미실현손익: {performance.get('unrealized_pnl', 0.0)}"
+    )

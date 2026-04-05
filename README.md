@@ -67,6 +67,7 @@ pytest -q
 - `logs/decisions.log`, `logs/pnl.log`, `logs/violations.log`가 강제 기록됩니다.
 - 생성된 신호는 `logs/signals.log`에 기록되고, `--emit-signals`로 콘솔 출력할 수 있습니다.
 - 텔레그램 알림은 신호/시스템/리스크를 전송하며 같은 신호는 1회만 보냅니다.
+- 텔레그램에 `[포트폴리오 현황]` 메시지로 총 포지션/누적수익률/실현·미실현손익이 함께 전송됩니다.
 - ENFORCEMENT 실패 시 신규 진입 차단(Fail-Closed), 기존 포지션 관리만 허용됩니다.
 - 매수(enter) 체결 시 포트폴리오에 자동 반영되고, 매도(exit) 체결 시 자동 제거됩니다.
 - 포트폴리오 스냅샷은 `state/portfolio.json`에 저장됩니다.

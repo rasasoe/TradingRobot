@@ -50,3 +50,4 @@ notifications:
     send_signal_alerts: true
     send_system_alerts: true
     send_risk_alerts: true
+    send_portfolio_summary: true

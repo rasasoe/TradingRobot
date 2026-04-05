@@ -14,6 +14,7 @@ from data.mock_data import make_mock_snapshot, validate_snapshot_sync
 from engines.crypto_engine import run_crypto_engine
 from engines.stock_engine import run_stock_engine
 from execution.notifier import (
+    format_portfolio_summary,
     format_risk_alert,
     format_signal_alert,
     format_system_alert,
@@ -278,6 +279,8 @@ def _notify_telegram(
     reasons: list[str],
     drift_warning: str,
     alert_idempotency: dict[str, Any],
+    portfolio: dict[str, Any],
+    performance: dict[str, Any],
 ) -> dict[str, Any]:
     notif = config.get("notifications", {}).get("telegram", {})
     if not bool(notif.get("enabled", False)):
@@ -311,6 +314,10 @@ def _notify_telegram(
             if send_telegram_message(bot_token, chat_id, format_signal_alert(sig, status)):
                 sent += 1
                 seen.add(sig_hash)
+
+    if bool(notif.get("send_portfolio_summary", True)):
+        if send_telegram_message(bot_token, chat_id, format_portfolio_summary(portfolio, performance)):
+            sent += 1
 
     alert_idempotency["seen"] = list(seen)
     return {"sent": sent, "seen": alert_idempotency["seen"]}
@@ -378,15 +385,6 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             config=config,
             emit_console_override=emit_signals,
         )
-        notify_result = _notify_telegram(
-            config=config,
-            signals=all_signals,
-            allow_new_entries=allow_new_entries,
-            block_reason=block_reason,
-            reasons=reasons,
-            drift_warning=drift.get("warning", "unknown"),
-            alert_idempotency=alert_idempotency,
-        )
         positions, idempotency, trades, newly_filled = execute_orders(
             base_dir=base_dir,
             signals=all_signals,
@@ -412,6 +410,17 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             positions=positions,
             prices=prices,
             trades=trades,
+        )
+        notify_result = _notify_telegram(
+            config=config,
+            signals=all_signals,
+            allow_new_entries=allow_new_entries,
+            block_reason=block_reason,
+            reasons=reasons,
+            drift_warning=drift.get("warning", "unknown"),
+            alert_idempotency=alert_idempotency,
+            portfolio=portfolio,
+            performance=performance,
         )
         save_positions(base_dir, positions)
         save_portfolio(base_dir, portfolio)
