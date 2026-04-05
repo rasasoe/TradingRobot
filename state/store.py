@@ -25,7 +25,7 @@ def append_jsonl(path: Path, row: dict[str, Any]) -> None:
 
 
 def ensure_state_files(base_dir: Path) -> None:
-    defaults = {
+    defaults: dict[str, Any] = {
         "positions.json": {},
         "portfolio.json": {"timestamp": None, "stock": [], "crypto": [], "total_positions": 0},
         "idempotency.json": {"seen": []},
@@ -41,89 +41,91 @@ def ensure_state_files(base_dir: Path) -> None:
             "drift_last_checked": None,
             "drift_last_warning": "unknown",
             "drift_last_trade_count": 0,
+            "cash": None,
+            "selector_stock_last_run": None,
+            "selector_crypto_last_run": None,
         },
         "trades.json": [],
         "pending_orders.json": [],
         "capital_events.json": [],
+        "watchlist_stock_auto.json": {"timestamp": None, "symbols": []},
+        "watchlist_crypto_auto.json": {"timestamp": None, "symbols": []},
+        "watchlist_stock_active.json": {"timestamp": None, "symbols": []},
+        "watchlist_crypto_active.json": {"timestamp": None, "symbols": []},
     }
-    for name, default in defaults.items():
-        path = base_dir / "state" / name
+    for filename, default in defaults.items():
+        path = base_dir / "state" / filename
         if not path.exists():
             _save_json(path, default)
 
 
+def load_json_state(base_dir: Path, filename: str, default: Any) -> Any:
+    return _load_json(base_dir / "state" / filename, default)
+
+
+def save_json_state(base_dir: Path, filename: str, data: Any) -> None:
+    _save_json(base_dir / "state" / filename, data)
+
+
 def load_positions(base_dir: Path) -> dict[str, Any]:
-    return _load_json(base_dir / "state" / "positions.json", {})
+    return load_json_state(base_dir, "positions.json", {})
 
 
 def save_positions(base_dir: Path, positions: dict[str, Any]) -> None:
-    _save_json(base_dir / "state" / "positions.json", positions)
+    save_json_state(base_dir, "positions.json", positions)
 
 
 def load_portfolio(base_dir: Path) -> dict[str, Any]:
-    return _load_json(
-        base_dir / "state" / "portfolio.json",
-        {"timestamp": None, "stock": [], "crypto": [], "total_positions": 0},
-    )
+    return load_json_state(base_dir, "portfolio.json", {"timestamp": None, "stock": [], "crypto": [], "total_positions": 0})
 
 
 def save_portfolio(base_dir: Path, portfolio: dict[str, Any]) -> None:
-    _save_json(base_dir / "state" / "portfolio.json", portfolio)
+    save_json_state(base_dir, "portfolio.json", portfolio)
 
 
 def load_idempotency(base_dir: Path) -> dict[str, Any]:
-    return _load_json(base_dir / "state" / "idempotency.json", {"seen": []})
+    return load_json_state(base_dir, "idempotency.json", {"seen": []})
 
 
-def save_idempotency(base_dir: Path, idempotency: dict[str, Any]) -> None:
-    _save_json(base_dir / "state" / "idempotency.json", idempotency)
+def save_idempotency(base_dir: Path, data: dict[str, Any]) -> None:
+    save_json_state(base_dir, "idempotency.json", data)
 
 
 def load_alert_idempotency(base_dir: Path) -> dict[str, Any]:
-    return _load_json(base_dir / "state" / "alert_idempotency.json", {"seen": []})
+    return load_json_state(base_dir, "alert_idempotency.json", {"seen": []})
 
 
-def save_alert_idempotency(base_dir: Path, idempotency: dict[str, Any]) -> None:
-    _save_json(base_dir / "state" / "alert_idempotency.json", idempotency)
+def save_alert_idempotency(base_dir: Path, data: dict[str, Any]) -> None:
+    save_json_state(base_dir, "alert_idempotency.json", data)
 
 
 def load_system_state(base_dir: Path) -> dict[str, Any]:
-    return _load_json(
-        base_dir / "state" / "system_state.json",
-        {
-            "violation_streak": 0,
-            "safe_mode": False,
-            "last_heartbeat": None,
-            "fast_heartbeat": None,
-            "r_multiplier": 1.0,
-            "disabled_strategies": [],
-            "pnl_log_fail_streak": 0,
-            "drift_last_checked": None,
-            "drift_last_warning": "unknown",
-            "drift_last_trade_count": 0,
-        },
-    )
+    return load_json_state(base_dir, "system_state.json", {})
 
 
-def save_system_state(base_dir: Path, state: dict[str, Any]) -> None:
-    _save_json(base_dir / "state" / "system_state.json", state)
+def save_system_state(base_dir: Path, data: dict[str, Any]) -> None:
+    save_json_state(base_dir, "system_state.json", data)
 
 
 def load_trades(base_dir: Path) -> list[dict[str, Any]]:
-    return _load_json(base_dir / "state" / "trades.json", [])
+    return load_json_state(base_dir, "trades.json", [])
 
 
 def save_trades(base_dir: Path, trades: list[dict[str, Any]]) -> None:
-    _save_json(base_dir / "state" / "trades.json", trades)
+    save_json_state(base_dir, "trades.json", trades)
 
 
 def load_pending_orders(base_dir: Path) -> list[dict[str, Any]]:
-    return _load_json(base_dir / "state" / "pending_orders.json", [])
+    return load_json_state(base_dir, "pending_orders.json", [])
 
 
-def save_pending_orders(base_dir: Path, orders: list[dict[str, Any]]) -> None:
-    _save_json(base_dir / "state" / "pending_orders.json", orders)
+def save_pending_orders(base_dir: Path, rows: list[dict[str, Any]]) -> None:
+    save_json_state(base_dir, "pending_orders.json", rows)
 
 
 def load_capital_events(base_dir: Path) -> list[dict[str, Any]]:
-    return _load_json(base_dir / "state" / "capital_events.json", [])
+    return load_json_state(base_dir, "capital_events.json", [])
+
+
+def save_capital_events(base_dir: Path, rows: list[dict[str, Any]]) -> None:
+    save_json_state(base_dir, "capital_events.json", rows)

@@ -1,59 +1,108 @@
-mode: paper
-data:
-  source: api  # api | mock
-  fallback_to_mock_on_error: true
-  api:
-    stock_provider: yahoo
-    crypto_provider: binance
-    request_timeout_sec: 8.0
+mode: paper  # paper | live_small
+
+system:
+  main_loop_seconds: 60
+  fast_loop_seconds: 15
+  safe_mode_violation_streak: 3
+  main_stale_seconds: 180
+  lock_stale_seconds: 180
 
 capital:
   initial_cash: 100000.0
   max_total_exposure: 0.8
   max_single_position_equity_pct: 0.1
   base_risk_per_trade: 0.01
+
+watchlist:
+  stock_max_active: 8
+  crypto_max_active: 8
+  apply_mode: auto  # auto | approval
+  stock_selector_hours: 24
+  crypto_selector_hours: 4
+
 stock:
   enabled: true
-  symbols:
-  - AAPL
-  - MSFT
-  max_vix: 25.0
   no_trade_minutes_after_open: 30
+  max_vix: 25.0
+
 crypto:
   enabled: true
-  symbols:
-  - BTCUSDT
-  - ETHUSDT
   allow_short: true
+
+static_symbols_stock:
+  - SPY
+  - NVDA
+  - STX
+  - DUOL
+  - AAPL
+  - MSFT
+
+static_symbols_crypto:
+  - BTCUSDT
+  - SOLUSDT
+  - ETHUSDT
+  - BNBUSDT
+
+selector:
+  stock_universe:
+    - AAPL
+    - MSFT
+    - NVDA
+    - AMZN
+    - GOOGL
+    - META
+    - AVGO
+    - TSLA
+    - JPM
+    - XOM
+    - UNH
+    - JNJ
+  crypto_quote: USDT
+  crypto_min_quote_volume: 50000000
+
 execution:
   spread_limit_pct: 0.5
   top3_orderbook_ratio_limit: 0.2
+
+backfill:
+  stock_sma_days: 60
+  crypto_dma_days: 220
+  breakout_lookback_bars: 20
+
 drift:
   winrate_drop_threshold: 0.15
-  avg_r_drop_threshold: 0.2
-  vol_change_threshold: 0.3
+  avg_r_drop_threshold: 0.20
+  vol_change_threshold: 0.30
   r_reduction_factor: 0.5
+  disable_strategies_on_drift:
+    - crypto_breakout
   check_interval_hours: 24
   check_every_n_new_trades: 20
   max_status_age_hours: 48
-  disable_strategies_on_drift:
-  - crypto_breakout
-system:
-  safe_mode_violation_streak: 3
-  loop_seconds: 60
-  fast_monitor_seconds: 15
-  main_stale_seconds: 180
-signal_output:
-  emit_log: true
-  emit_console: false
+
+data:
+  source: api  # api | mock
+  fallback_to_mock_on_error: true
+  api:
+    request_timeout_sec: 8.0
+
 notifications:
+  console:
+    enabled: true
   telegram:
     enabled: false
-    bot_username: tradingrasbot
-    bot_token: ""
-    chat_id: ""
     send_signal_alerts: true
     send_system_alerts: true
     send_risk_alerts: true
     send_portfolio_summary: true
     portfolio_summary_interval_minutes: 60
+
+logs:
+  rotate_max_mb: 3
+  rotate_keep: 3
+
+paper:
+  fill_mode: immediate
+
+live_small:
+  strict_enforcement: true

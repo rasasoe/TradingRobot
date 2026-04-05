@@ -1,103 +1,158 @@
-# TradingRobot
+# TradingRobot (Raspberry Pi 3)
 
-## Multi-Asset Auto Trading System (Stock + Crypto Separated)
+Pi 3 운영 기준(저빈도/저I/O) 멀티자산 감시/알림/자동매매 시스템입니다.
 
-### Requirements
-- Python 3.11+
+## 1) 구조
+```text
+StockPlatform/
+├── config/
+│   ├── config.yaml
+│   ├── settings.py
+│   └── secrets.example.yaml
+├── data/
+│   ├── providers/
+│   ├── cache/
+│   └── mock/
+├── engines/
+│   ├── stock_engine.py
+│   ├── crypto_engine.py
+│   ├── selector_stock.py
+│   ├── selector_crypto.py
+│   ├── session_guard.py
+│   └── drift.py
+├── execution/
+│   ├── executor.py
+│   ├── order_router.py
+│   └── reconciliation.py
+├── risk/
+│   ├── risk_manager.py
+│   ├── enforcement.py
+│   └── safe_mode.py
+├── notifications/
+│   ├── telegram_notifier.py
+│   ├── console_notifier.py
+│   └── router.py
+├── ops/
+│   ├── monitor.py
+│   ├── recovery.py
+│   ├── log_rotate.py
+│   └── ops.py
+├── state/
+├── logs/
+├── tests/
+├── orchestrator.py
+├── orchestrator_fast.py
+├── fast_monitor.py
+├── monitor.py
+├── recovery.py
+├── requirements.txt
+└── deploy/systemd/
+    ├── trading.service
+    └── trading-fast.service
+```
 
-### Install
+## 2) 모드
+- `paper`: 키 없이 즉시 실행, API 실패 시 mock fallback.
+- `live_small`: 소액 운용, fail-closed 동일 강제.
+
+## 3) 핵심 동작
+- 메인 루프 `60초`: 데이터/신규진입/리스크/주문/성과/로그/알림.
+- 빠른 루프 `15초`: 기존 포지션 stop 감시 + 메인 heartbeat stale 감지.
+- `stock/crypto` 엔진 분리.
+- idempotency key: `asset + side + candle_timestamp + strategy_name + action`.
+- fail-closed:
+  - `TIME SYNC` 불일치
+  - `PnL` 기록 실패(1회 재시도 후 연속 실패만 violation)
+  - drift 상태 미확인
+  - capital event candle
+- violation 3회 연속 시 safe mode.
+- watchlist selector:
+  - stock 24시간
+  - crypto 4시간
+  - static/auto/active 분리 운영
+
+## 4) 설치
 ```bash
+cd /Users/rasasoe/workspace/StockPlatform
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Run (Paper Mode)
+## 5) 즉시 실행 (Paper)
 ```bash
-python3 orchestrator.py --base-dir . --config config/config.yaml
-```
-기본은 실데이터 API(`Yahoo + Binance`)를 사용하고, 실패 시 mock으로 자동 fallback 됩니다.
-메인 루프는 Raspberry Pi 운영 기준으로 60초 정책을 사용합니다.
-
-### Run With Signal Emit
-```bash
+cd /Users/rasasoe/workspace/StockPlatform
+source .venv/bin/activate
 python3 orchestrator.py --base-dir . --config config/config.yaml --emit-signals
-```
-출력은 한글 요약과 함께 현재 포트폴리오를 포함합니다.
-출력에 누적 수익률(`performance.return_pct`)이 포함됩니다.
-
-### Fast Monitor (10~15s)
-```bash
-python3 fast_monitor.py --base-dir . --config config/config.yaml
-```
-기존 포지션 stop_price 감시, 메인 루프 생존 감시, 긴급 경고 알림을 수행합니다.
-
-### Telegram Setup
-1. Telegram에서 `@BotFather` 열기
-2. `/newbot` 실행해서 `bot_token` 발급
-3. `@tradingrasbot` 대화창 열고 `/start` 1회 전송
-4. 자동 설정 실행 (`chat_id` 자동 탐지 + config 반영)
-```bash
-python3 setup_telegram.py --bot-token "<YOUR_BOT_TOKEN>" --enable
-```
-5. 오케스트레이터 실행
-```bash
-python3 orchestrator.py --base-dir . --config config/config.yaml --emit-signals
+python3 orchestrator_fast.py --base-dir . --config config/config.yaml
 ```
 
-### Telegram Env Override (Optional)
+## 6) 텔레그램 설정
 ```bash
-export TRADING_TELEGRAM_BOT_TOKEN="<YOUR_BOT_TOKEN>"
-export TRADING_TELEGRAM_CHAT_ID="<YOUR_CHAT_ID>"
-python3 orchestrator.py --base-dir . --config config/config.yaml --emit-signals
+cd /Users/rasasoe/workspace/StockPlatform
+source .venv/bin/activate
+export TRADING_TELEGRAM_BOT_TOKEN='YOUR_TOKEN'
+export TRADING_TELEGRAM_CHAT_ID='YOUR_CHAT_ID'
+python3 setup_telegram.py --enable
+```
+- 토큰은 `config/secrets.yaml` 또는 환경변수 사용.
+- 토큰이 없어도 paper 모드 실행 가능.
+
+## 7) Ops 명령
+```bash
+python3 ops/ops.py status --base-dir .
+python3 ops/ops.py watchlist --base-dir .
+python3 ops/ops.py portfolio --base-dir .
+python3 ops/ops.py force-drift --base-dir . --config config/config.yaml
+python3 ops/ops.py unlock-safe-mode --base-dir .
+python3 ops/ops.py clear-idempotency --base-dir .
+python3 ops/ops.py apply-watchlist --base-dir .
+python3 ops/ops.py add-capital-event --base-dir . --event-type deposit --amount 1000 --note "manual topup"
 ```
 
-### Recovery
-```bash
-python3 recovery.py --base-dir .
-```
-
-### Monitor
+## 8) 모니터/복구
 ```bash
 python3 monitor.py --base-dir .
+python3 recovery.py --base-dir . --mode paper
 ```
 
-### Test
-```bash
-pytest -q
-```
-
-### Notes
-- API 없이 `mock` 데이터로 즉시 실행됩니다.
-- `config/config.yaml`의 `data.source`를 `api` 또는 `mock`으로 선택할 수 있습니다.
-- `state/*.json`에 포지션/평균가/손절가/상태가 저장되고 재시작 시 자동 로드됩니다.
-- `logs/decisions.log`, `logs/pnl.log`, `logs/violations.log`가 강제 기록됩니다.
-- 생성된 신호는 `logs/signals.log`에 기록되고, `--emit-signals`로 콘솔 출력할 수 있습니다.
-- 텔레그램 알림은 신호/시스템/리스크를 전송하며 같은 신호는 1회만 보냅니다.
-- 텔레그램에 `[포트폴리오 현황]` 메시지로 총 포지션/누적수익률/실현·미실현손익이 함께 전송됩니다.
-- ENFORCEMENT 실패 시 신규 진입 차단(Fail-Closed), 기존 포지션 관리만 허용됩니다.
-- 매수(enter) 체결 시 포트폴리오에 자동 반영되고, 매도(exit) 체결 시 자동 제거됩니다.
-- 포트폴리오 스냅샷은 `state/portfolio.json`에 저장됩니다.
-- 수익률/실현손익/미실현손익은 `logs/performance.log`와 실행 출력에 기록됩니다.
-- PnL 기록은 1회 재시도하고 연속 실패일 때만 violation streak가 증가합니다.
-- drift detection은 매 루프가 아니라 하루 1회 또는 N회 체결 기준으로 계산됩니다.
-- 포트폴리오 요약 알림은 `portfolio_summary_interval_minutes` 주기로 제한됩니다.
-
-### Raspberry Pi 3 (systemd)
+## 9) systemd (Pi3)
 ```bash
 sudo cp deploy/systemd/trading.service /etc/systemd/system/trading.service
 sudo cp deploy/systemd/trading-fast.service /etc/systemd/system/trading-fast.service
 cp deploy/systemd/trading.env.example deploy/systemd/trading.env
-nano deploy/systemd/trading.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now trading
 sudo systemctl enable --now trading-fast
-sudo systemctl status trading
-sudo systemctl status trading-fast
+sudo systemctl status trading --no-pager
+sudo systemctl status trading-fast --no-pager
 ```
 
-### Raspberry Pi 3 One-Command Setup
+## 10) 로그/상태 파일
+- 로그:
+  - `logs/decisions.log`
+  - `logs/pnl.log`
+  - `logs/performance.log` (`return_pct` 포함)
+  - `logs/violations.log`
+- 상태:
+  - `state/positions.json`
+  - `state/portfolio.json`
+  - `state/system_state.json`
+  - `state/idempotency.json`
+  - `state/alert_idempotency.json`
+  - `state/watchlist_*`
+  - `state/capital_events.json`
+
+## 11) 테스트
 ```bash
-chmod +x deploy/pi3_quickstart.sh
-./deploy/pi3_quickstart.sh
+cd /Users/rasasoe/workspace/StockPlatform
+source .venv/bin/activate
+pytest -q
 ```
+
+포함 테스트:
+- orchestrator 1회 실행
+- fail-closed 차단
+- idempotency 중복 방지
+- watchlist selector 생성
+- recovery state load
