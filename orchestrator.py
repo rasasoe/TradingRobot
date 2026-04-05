@@ -158,6 +158,12 @@ def _write_pnl_log(base_dir: Path, ts: str, positions: dict[str, Any], prices: d
         return False
 
 
+def _write_pnl_log_with_retry(base_dir: Path, ts: str, positions: dict[str, Any], prices: dict[str, float]) -> bool:
+    if _write_pnl_log(base_dir, ts, positions, prices):
+        return True
+    return _write_pnl_log(base_dir, ts, positions, prices)
+
+
 def _record_violation(base_dir: Path, ts: str, reasons: list[str]) -> None:
     append_jsonl(base_dir / "logs" / "violations.log", {"timestamp": ts, "reasons": reasons})
 
@@ -233,6 +239,49 @@ def _build_performance_snapshot(
     return snapshot
 
 
+def _maybe_evaluate_drift(
+    now_ts: datetime,
+    trades: list[dict[str, Any]],
+    config: dict[str, Any],
+    system_state: dict[str, Any],
+) -> dict[str, Any]:
+    drift_cfg = config.get("drift", {})
+    interval_hours = float(drift_cfg.get("check_interval_hours", 24))
+    every_n_trades = int(drift_cfg.get("check_every_n_new_trades", 20))
+    max_status_age_hours = float(drift_cfg.get("max_status_age_hours", 48))
+
+    last_checked_iso = system_state.get("drift_last_checked")
+    last_trade_count = int(system_state.get("drift_last_trade_count", 0))
+    current_trade_count = len(trades)
+
+    due_by_time = True
+    if last_checked_iso:
+        last_checked = datetime.fromisoformat(str(last_checked_iso)).astimezone(timezone.utc)
+        due_by_time = (now_ts - last_checked).total_seconds() >= (interval_hours * 3600)
+    due_by_trades = (current_trade_count - last_trade_count) >= every_n_trades
+    due = (not last_checked_iso) or due_by_time or due_by_trades
+
+    if due:
+        drift = evaluate_drift(now_ts, trades, config, system_state)
+        if drift.get("checked", False):
+            system_state["drift_last_checked"] = now_ts.isoformat()
+            system_state["drift_last_warning"] = drift.get("warning", "ok")
+            system_state["drift_last_trade_count"] = current_trade_count
+        return drift
+
+    if not last_checked_iso:
+        return {"checked": False, "warning": "drift_not_initialized", "drift": False, "metrics": {}}
+
+    last_checked = datetime.fromisoformat(str(last_checked_iso)).astimezone(timezone.utc)
+    age_ok = (now_ts - last_checked).total_seconds() <= (max_status_age_hours * 3600)
+    return {
+        "checked": bool(age_ok),
+        "warning": str(system_state.get("drift_last_warning", "ok")),
+        "drift": str(system_state.get("drift_last_warning", "ok")) == "drift_detected",
+        "metrics": {},
+    }
+
+
 def _publish_signals(
     base_dir: Path,
     timestamp: str,
@@ -272,6 +321,7 @@ def _publish_signals(
 
 
 def _notify_telegram(
+    ts: str,
     config: dict[str, Any],
     signals: list[dict[str, Any]],
     allow_new_entries: bool,
@@ -295,16 +345,11 @@ def _notify_telegram(
         if send_telegram_message(bot_token, chat_id, format_system_alert(reasons)):
             sent += 1
 
-    if drift_warning == "drift_detected" and bool(notif.get("send_risk_alerts", True)):
-        if send_telegram_message(bot_token, chat_id, format_risk_alert(drift_warning)):
-            sent += 1
-
     if bool(notif.get("send_signal_alerts", True)):
         for sig in signals:
-            base = (
-                f"{sig.get('timestamp','')}|{sig.get('engine','')}|{sig.get('asset','')}|"
-                f"{sig.get('action','')}|{sig.get('side','')}|{sig.get('signal_type','')}|{sig.get('price',0)}"
-            )
+            candle_ts = str(sig.get("timestamp", ts))[:16]
+            strategy_name = str(sig.get("strategy", sig.get("signal_type", "unknown")))
+            base = f"{sig.get('asset','')}|{sig.get('side','')}|{candle_ts}|{strategy_name}"
             sig_hash = hashlib.sha256(base.encode("utf-8")).hexdigest()
             if sig_hash in seen:
                 continue
@@ -316,8 +361,25 @@ def _notify_telegram(
                 seen.add(sig_hash)
 
     if bool(notif.get("send_portfolio_summary", True)):
-        if send_telegram_message(bot_token, chat_id, format_portfolio_summary(portfolio, performance)):
-            sent += 1
+        interval_min = int(notif.get("portfolio_summary_interval_minutes", 60))
+        last_summary_iso = alert_idempotency.get("last_portfolio_summary_ts")
+        should_send_summary = True
+        if last_summary_iso:
+            last_summary = datetime.fromisoformat(str(last_summary_iso)).astimezone(timezone.utc)
+            now_dt = datetime.fromisoformat(ts).astimezone(timezone.utc)
+            should_send_summary = (now_dt - last_summary).total_seconds() >= (interval_min * 60)
+        if should_send_summary:
+            if send_telegram_message(bot_token, chat_id, format_portfolio_summary(portfolio, performance)):
+                sent += 1
+                alert_idempotency["last_portfolio_summary_ts"] = ts
+
+    if bool(notif.get("send_risk_alerts", True)):
+        prev_risk_state = str(alert_idempotency.get("last_risk_warning_state", ""))
+        cur_risk_state = str(drift_warning)
+        if cur_risk_state != prev_risk_state:
+            if send_telegram_message(bot_token, chat_id, format_risk_alert(cur_risk_state)):
+                sent += 1
+            alert_idempotency["last_risk_warning_state"] = cur_risk_state
 
     alert_idempotency["seen"] = list(seen)
     return {"sent": sent, "seen": alert_idempotency["seen"]}
@@ -327,7 +389,10 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
     ensure_state_files(base_dir)
     config = load_config(base_dir, config_rel_path)
 
-    fd = acquire_lock(base_dir)
+    try:
+        fd = acquire_lock(base_dir)
+    except FileExistsError:
+        return {"skipped": True, "reason": "lock_busy"}
     try:
         now_ts = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         snapshot, data_source = update_data(now_ts, config)
@@ -348,30 +413,42 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
         crypto_signals = run_crypto_engine(snapshot, config, system_state.get("disabled_strategies", []))
         entry_signals = stock_signals + crypto_signals
 
-        drift = evaluate_drift(now_ts, trades, config, system_state)
-        pnl_ok = _write_pnl_log(base_dir, ts, positions, prices)
+        drift = _maybe_evaluate_drift(now_ts, trades, config, system_state)
+        pnl_ok = _write_pnl_log_with_retry(base_dir, ts, positions, prices)
         time_sync_ok = validate_data(snapshot)
 
-        reasons: list[str] = []
+        reasons_block: list[str] = []
+        reasons_violation: list[str] = []
         if not time_sync_ok:
-            reasons.append("TIME_SYNC_UNMATCHED")
+            reasons_block.append("TIME_SYNC_UNMATCHED")
+            reasons_violation.append("TIME_SYNC_UNMATCHED")
         if not pnl_ok:
-            reasons.append("PNL_LOG_FAILED")
+            reasons_block.append("PNL_LOG_FAILED")
+            fail_streak = int(system_state.get("pnl_log_fail_streak", 0)) + 1
+            system_state["pnl_log_fail_streak"] = fail_streak
+            if fail_streak >= 2:
+                reasons_violation.append("PNL_LOG_FAILED_CONSECUTIVE")
+        else:
+            system_state["pnl_log_fail_streak"] = 0
         if not drift.get("checked", False):
-            reasons.append("DRIFT_STATUS_UNCHECKED")
+            reasons_block.append("DRIFT_STATUS_UNCHECKED")
+            reasons_violation.append("DRIFT_STATUS_UNCHECKED")
 
         if _capital_event_blocks_entry(ts, load_capital_events(base_dir)):
-            reasons.append("CAPITAL_EVENT_CANDLE")
+            reasons_block.append("CAPITAL_EVENT_CANDLE")
 
-        if reasons:
+        if reasons_violation:
             system_state["violation_streak"] = int(system_state.get("violation_streak", 0)) + 1
             if system_state["violation_streak"] >= int(config["system"]["safe_mode_violation_streak"]):
                 system_state["safe_mode"] = True
-            _record_violation(base_dir, ts, reasons)
-            allow_new_entries = False
-            block_reason = "|".join(reasons)
+            _record_violation(base_dir, ts, reasons_violation)
         else:
             system_state["violation_streak"] = 0
+
+        if reasons_block:
+            allow_new_entries = False
+            block_reason = "|".join(reasons_block)
+        else:
             allow_new_entries = not bool(system_state.get("safe_mode", False))
             block_reason = "SAFE_MODE" if system_state.get("safe_mode", False) else ""
 
@@ -412,11 +489,12 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             trades=trades,
         )
         notify_result = _notify_telegram(
+            ts=ts,
             config=config,
             signals=all_signals,
             allow_new_entries=allow_new_entries,
             block_reason=block_reason,
-            reasons=reasons,
+            reasons=reasons_block,
             drift_warning=drift.get("warning", "unknown"),
             alert_idempotency=alert_idempotency,
             portfolio=portfolio,
@@ -456,6 +534,8 @@ def main() -> None:
 
     result = run_once(Path(args.base_dir).resolve(), args.config, emit_signals=args.emit_signals)
     print(json.dumps(result, ensure_ascii=False))
+    if result.get("skipped"):
+        return
     print(
         f"[요약] 신규진입허용={result['allow_new_entries']} "
         f"안전모드={result['safe_mode']} "

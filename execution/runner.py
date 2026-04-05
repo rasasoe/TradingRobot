@@ -13,9 +13,10 @@ from state.store import append_jsonl
 
 
 def signal_hash(signal: dict[str, Any]) -> str:
+    candle_ts = str(signal.get("timestamp", ""))[:16]
+    strategy_name = str(signal.get("strategy", signal.get("signal_type", "unknown")))
     base = (
-        f"{signal['timestamp']}|{signal['engine']}|{signal['asset']}|"
-        f"{signal['action']}|{signal['side']}|{signal['signal_type']}|{signal['price']}"
+        f"{signal.get('asset','')}|{signal.get('side','')}|{candle_ts}|{strategy_name}|{signal.get('action','')}"
     )
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 

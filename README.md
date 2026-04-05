@@ -17,6 +17,7 @@ pip install -r requirements.txt
 python3 orchestrator.py --base-dir . --config config/config.yaml
 ```
 기본은 실데이터 API(`Yahoo + Binance`)를 사용하고, 실패 시 mock으로 자동 fallback 됩니다.
+메인 루프는 Raspberry Pi 운영 기준으로 60초 정책을 사용합니다.
 
 ### Run With Signal Emit
 ```bash
@@ -24,6 +25,12 @@ python3 orchestrator.py --base-dir . --config config/config.yaml --emit-signals
 ```
 출력은 한글 요약과 함께 현재 포트폴리오를 포함합니다.
 출력에 누적 수익률(`performance.return_pct`)이 포함됩니다.
+
+### Fast Monitor (10~15s)
+```bash
+python3 fast_monitor.py --base-dir . --config config/config.yaml
+```
+기존 포지션 stop_price 감시, 메인 루프 생존 감시, 긴급 경고 알림을 수행합니다.
 
 ### Telegram Setup
 1. Telegram에서 `@BotFather` 열기
@@ -72,15 +79,21 @@ pytest -q
 - 매수(enter) 체결 시 포트폴리오에 자동 반영되고, 매도(exit) 체결 시 자동 제거됩니다.
 - 포트폴리오 스냅샷은 `state/portfolio.json`에 저장됩니다.
 - 수익률/실현손익/미실현손익은 `logs/performance.log`와 실행 출력에 기록됩니다.
+- PnL 기록은 1회 재시도하고 연속 실패일 때만 violation streak가 증가합니다.
+- drift detection은 매 루프가 아니라 하루 1회 또는 N회 체결 기준으로 계산됩니다.
+- 포트폴리오 요약 알림은 `portfolio_summary_interval_minutes` 주기로 제한됩니다.
 
 ### Raspberry Pi 3 (systemd)
 ```bash
 sudo cp deploy/systemd/trading.service /etc/systemd/system/trading.service
+sudo cp deploy/systemd/trading-fast.service /etc/systemd/system/trading-fast.service
 cp deploy/systemd/trading.env.example deploy/systemd/trading.env
 nano deploy/systemd/trading.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now trading
+sudo systemctl enable --now trading-fast
 sudo systemctl status trading
+sudo systemctl status trading-fast
 ```
 
 ### Raspberry Pi 3 One-Command Setup

@@ -38,12 +38,16 @@ ENV
 
 if [[ -w /etc/systemd/system ]]; then
   cp deploy/systemd/trading.service /etc/systemd/system/trading.service
+  cp deploy/systemd/trading-fast.service /etc/systemd/system/trading-fast.service
 else
   sudo cp deploy/systemd/trading.service /etc/systemd/system/trading.service
+  sudo cp deploy/systemd/trading-fast.service /etc/systemd/system/trading-fast.service
 fi
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now trading
+sudo systemctl enable --now trading-fast
 sudo systemctl status trading --no-pager
+sudo systemctl status trading-fast --no-pager
 
 python3 orchestrator.py --base-dir . --config config/config.yaml --emit-signals

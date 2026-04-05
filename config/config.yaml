@@ -33,11 +33,16 @@ drift:
   avg_r_drop_threshold: 0.2
   vol_change_threshold: 0.3
   r_reduction_factor: 0.5
+  check_interval_hours: 24
+  check_every_n_new_trades: 20
+  max_status_age_hours: 48
   disable_strategies_on_drift:
   - crypto_breakout
 system:
   safe_mode_violation_streak: 3
   loop_seconds: 60
+  fast_monitor_seconds: 15
+  main_stale_seconds: 180
 signal_output:
   emit_log: true
   emit_console: false
@@ -51,3 +56,4 @@ notifications:
     send_system_alerts: true
     send_risk_alerts: true
     send_portfolio_summary: true
+    portfolio_summary_interval_minutes: 60
