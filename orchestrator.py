@@ -20,6 +20,7 @@ from execution.executor import execute_orders
 from notifications.router import NotificationRouter
 from ops.log_rotate import rotate_logs
 from risk.enforcement import evaluate_enforcement
+from risk.qam_bridge import apply_qam_policy
 from risk.safe_mode import can_enter_new_position, update_safe_mode
 from state.store import (
     append_jsonl,
@@ -642,13 +643,65 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
         allow_new_entries = can_enter_new_position(system_state, allow_from_enforcement)
         block_reason = "|".join(block_reasons) if block_reasons else ("SAFE_MODE" if system_state.get("safe_mode", False) else "")
 
-        # Alpha mutual exclusion: stock alpha and crypto alpha cannot open together
-        stock_alpha = [s for s in stock_signals if str(s.get("role", "")).lower() == "alpha" and s.get("action") == "enter"]
-        crypto_alpha = [s for s in crypto_signals if str(s.get("role", "")).lower() == "alpha" and s.get("action") == "enter"]
-        if stock_alpha and crypto_alpha:
-            crypto_signals = [s for s in crypto_signals if s not in crypto_alpha]
+        # Kill switch: drawdown breach => liquidate all and force safe mode
+        initial_cash = float(config.get("capital", {}).get("initial_cash", 100000.0))
+        realized_before = sum(float(t.get("pnl", 0.0)) for t in trades)
+        unrealized_before = 0.0
+        for asset, pos in positions.items():
+            qty = float(pos.get("qty", 0.0))
+            avg = float(pos.get("avg_price", 0.0))
+            px = float(prices.get(asset, avg))
+            pnl = (px - avg) * qty
+            if pos.get("side") == "short":
+                pnl = -pnl
+            unrealized_before += pnl
+        equity_before = initial_cash + realized_before + unrealized_before
+        peak = float(system_state.get("peak_equity", initial_cash) or initial_cash)
+        if peak < initial_cash or peak > initial_cash * 3.0:
+            peak = initial_cash
+        peak = max(peak, equity_before)
+        system_state["peak_equity"] = round(peak, 4)
+        drawdown = (equity_before / initial_cash - 1.0) if initial_cash > 0 else 0.0
+        kill_threshold = -abs(float(config.get("system", {}).get("kill_switch_drawdown_pct", 15.0)) / 100.0)
+        kill_switch = drawdown <= kill_threshold
+        if kill_switch:
+            system_state["safe_mode"] = True
+            allow_new_entries = False
+            block_reason = "KILL_SWITCH_DRAWDOWN"
+            for asset, pos in positions.items():
+                if str(pos.get("role", "")).lower() == "quarantine" or asset == "DUOL":
+                    continue
+                px = float(prices.get(asset, float(pos.get("avg_price", 0.0))))
+                management_signals.append(
+                    {
+                        "timestamp": ts,
+                        "engine": pos.get("engine", "unknown"),
+                        "strategy": "kill_switch_exit",
+                        "asset": asset,
+                        "action": "exit",
+                        "side": pos.get("side", "long"),
+                        "signal_type": pos.get("signal_type", "risk"),
+                        "role": pos.get("role", "core"),
+                        "regime": "risk_control",
+                        "score": 1.0,
+                        "atr": 0.0,
+                        "price": px,
+                        "stop_price": float(pos.get("stop_price", px)),
+                        "reason": "drawdown_kill_switch",
+                        "orderbook": {"top3_ratio": 0.0, "spread_pct": 0.0},
+                    }
+                )
 
-        all_signals = stock_signals + crypto_signals + management_signals
+        all_signals, qam_decision = apply_qam_policy(
+            base_dir=base_dir,
+            ts=ts,
+            stock_signals=stock_signals,
+            crypto_signals=crypto_signals,
+            management_signals=management_signals,
+            allow_new_entries=allow_new_entries,
+            block_reason=block_reason,
+            safe_mode=bool(system_state.get("safe_mode", False)),
+        )
 
         if not all_signals:
             append_jsonl(
@@ -734,6 +787,8 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             "performance": perf,
             "watchlist": {"stock": stock_symbols, "crypto": crypto_symbols},
             "qam_signal": qam_text if all_signals else "",
+            "qam_decision": qam_decision,
+            "kill_switch": kill_switch,
         }
     finally:
         release_lock(base_dir, fd)

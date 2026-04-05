@@ -46,6 +46,7 @@ def test_orchestrator_one_run(tmp_path: Path) -> None:
     assert "timestamp" in result
     assert (base / "logs" / "decisions.log").exists()
     assert (base / "logs" / "pnl.log").exists()
+    assert (base / "logs" / "qam_decision.log").exists()
 
 
 def test_fail_closed_blocks_new_entries(tmp_path: Path, monkeypatch) -> None:

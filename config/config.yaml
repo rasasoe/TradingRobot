@@ -6,6 +6,7 @@ system:
   safe_mode_violation_streak: 3
   main_stale_seconds: 180
   lock_stale_seconds: 180
+  kill_switch_drawdown_pct: 15
 
 capital:
   initial_cash: 100000.0

@@ -42,6 +42,7 @@ def ensure_state_files(base_dir: Path) -> None:
             "drift_last_warning": "unknown",
             "drift_last_trade_count": 0,
             "cash": None,
+            "peak_equity": None,
             "selector_stock_last_run": None,
             "selector_crypto_last_run": None,
         },
