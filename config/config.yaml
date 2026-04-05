@@ -1,4 +1,12 @@
 mode: paper
+data:
+  source: api  # api | mock
+  fallback_to_mock_on_error: true
+  api:
+    stock_provider: yahoo
+    crypto_provider: binance
+    request_timeout_sec: 8.0
+
 capital:
   initial_cash: 100000.0
   max_total_exposure: 0.8

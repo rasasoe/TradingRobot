@@ -16,6 +16,7 @@ pip install -r requirements.txt
 ```bash
 python3 orchestrator.py --base-dir . --config config/config.yaml
 ```
+기본은 실데이터 API(`Yahoo + Binance`)를 사용하고, 실패 시 mock으로 자동 fallback 됩니다.
 
 ### Run With Signal Emit
 ```bash
@@ -61,6 +62,7 @@ pytest -q
 
 ### Notes
 - API 없이 `mock` 데이터로 즉시 실행됩니다.
+- `config/config.yaml`의 `data.source`를 `api` 또는 `mock`으로 선택할 수 있습니다.
 - `state/*.json`에 포지션/평균가/손절가/상태가 저장되고 재시작 시 자동 로드됩니다.
 - `logs/decisions.log`, `logs/pnl.log`, `logs/violations.log`가 강제 기록됩니다.
 - 생성된 신호는 `logs/signals.log`에 기록되고, `--emit-signals`로 콘솔 출력할 수 있습니다.

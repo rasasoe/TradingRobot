@@ -5,6 +5,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -19,6 +21,10 @@ def test_orchestrator_runs_and_logs(tmp_path: Path) -> None:
         (tmp_path / folder).mkdir(parents=True, exist_ok=True)
 
     shutil.copy(src / "config" / "config.yaml", tmp_path / "config" / "config.yaml")
+    cfg_path = tmp_path / "config" / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    cfg.setdefault("data", {})["source"] = "mock"
+    cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=False, sort_keys=False), encoding="utf-8")
 
     result = run_once(tmp_path)
     assert "timestamp" in result

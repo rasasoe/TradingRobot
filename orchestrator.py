@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from config.settings import load_config
+from data.live_data import make_api_snapshot
 from data.mock_data import make_mock_snapshot, validate_snapshot_sync
 from engines.crypto_engine import run_crypto_engine
 from engines.stock_engine import run_stock_engine
@@ -51,8 +52,18 @@ def release_lock(base_dir: Path, fd: int) -> None:
     (base_dir / "state" / "run.lock").unlink(missing_ok=True)
 
 
-def update_data(now_ts: datetime, config: dict[str, Any]) -> dict[str, Any]:
-    return make_mock_snapshot(now_ts, config)
+def update_data(now_ts: datetime, config: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    data_cfg = config.get("data", {})
+    source = str(data_cfg.get("source", "mock")).lower()
+    fallback = bool(data_cfg.get("fallback_to_mock_on_error", True))
+    if source == "api":
+        try:
+            return make_api_snapshot(now_ts, config), "api"
+        except Exception:
+            if not fallback:
+                raise
+            return make_mock_snapshot(now_ts, config), "mock_fallback"
+    return make_mock_snapshot(now_ts, config), "mock"
 
 
 def validate_data(snapshot: dict[str, Any]) -> bool:
@@ -312,7 +323,7 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
     fd = acquire_lock(base_dir)
     try:
         now_ts = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        snapshot = update_data(now_ts, config)
+        snapshot, data_source = update_data(now_ts, config)
         ts = snapshot["timestamp"]
 
         positions = load_positions(base_dir)
@@ -419,6 +430,7 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             "signals_emitted": emitted_signals,
             "telegram_sent": int(notify_result.get("sent", 0)),
             "drift_warning": drift.get("warning", "unknown"),
+            "data_source": data_source,
             "portfolio": portfolio,
             "performance": performance,
         }
