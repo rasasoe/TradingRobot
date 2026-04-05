@@ -10,3 +10,5 @@ state/*.json
 state/run.lock
 deploy/systemd/trading.env
 .env
+
+data/cache/*.json
