@@ -97,6 +97,7 @@ notifications:
     send_system_alerts: true
     send_risk_alerts: true
     send_portfolio_summary: true
+    portfolio_summary_on_signal: true
     portfolio_summary_interval_minutes: 60
 
 logs:

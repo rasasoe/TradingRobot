@@ -563,6 +563,8 @@ def _notify(
         if router.send("[SYSTEM]\n" + "|".join(reasons)):
             sent += 1
 
+    has_trade_signal = any(str(sig.get("action", "")).lower() in {"enter", "exit"} for sig in signals)
+
     if bool(notif_cfg.get("send_signal_alerts", True)) and signals:
         for sig in signals:
             candle_ts = str(sig.get("timestamp", ts))[:16]
@@ -591,12 +593,15 @@ def _notify(
 
     if bool(notif_cfg.get("send_portfolio_summary", True)):
         interval_min = int(notif_cfg.get("portfolio_summary_interval_minutes", 60))
+        send_on_signal = bool(notif_cfg.get("portfolio_summary_on_signal", True))
         last_iso = alert_state.get("last_portfolio_summary_ts")
-        should_send = True
-        if last_iso:
-            last_dt = datetime.fromisoformat(str(last_iso)).astimezone(timezone.utc)
-            now_dt = datetime.fromisoformat(ts).astimezone(timezone.utc)
-            should_send = (now_dt - last_dt).total_seconds() >= interval_min * 60
+        should_send = bool(send_on_signal and has_trade_signal)
+        if not should_send:
+            should_send = True
+            if last_iso:
+                last_dt = datetime.fromisoformat(str(last_iso)).astimezone(timezone.utc)
+                now_dt = datetime.fromisoformat(ts).astimezone(timezone.utc)
+                should_send = (now_dt - last_dt).total_seconds() >= interval_min * 60
         if should_send:
             if router.send(_portfolio_summary_text(portfolio, performance)):
                 sent += 1
