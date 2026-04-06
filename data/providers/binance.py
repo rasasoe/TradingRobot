@@ -32,8 +32,17 @@ def book_ticker(symbol: str, timeout: float) -> dict[str, Any]:
 def orderbook_liquidity(symbol: str, timeout: float, limit: int = 20) -> dict[str, float]:
     import ccxt
 
+    def _to_ccxt_symbol(s: str) -> str:
+        if "/" in s:
+            return s
+        # Binance spot symbols commonly come as BASEQUOTE (e.g., BTCUSDT).
+        for q in ("USDT", "USDC", "BUSD", "FDUSD", "TUSD", "BTC", "ETH", "BNB"):
+            if s.endswith(q) and len(s) > len(q):
+                return f"{s[:-len(q)]}/{q}"
+        return s
+
     ex = ccxt.binance({"enableRateLimit": True, "timeout": int(timeout * 1000)})
-    ob = ex.fetch_order_book(symbol, limit=max(20, limit))
+    ob = ex.fetch_order_book(_to_ccxt_symbol(symbol), limit=max(20, limit))
     bids = ob.get("bids", []) or []
     asks = ob.get("asks", []) or []
     if not bids or not asks:

@@ -653,14 +653,16 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
 
         data_source = str(config.get("data", {}).get("source", "mock")).lower()
         mock_fallback_active = False
+        api_fallback_error = ""
         snapshot: dict[str, Any]
         if data_source == "api":
             try:
                 snapshot = build_api_snapshot(base_dir, now_ts, config, stock_symbols, crypto_symbols)
                 data_source = "api"
-            except Exception:
+            except Exception as e:
                 if not bool(config.get("data", {}).get("fallback_to_mock_on_error", True)):
                     raise
+                api_fallback_error = f"{type(e).__name__}: {e}"
                 snapshot = make_mock_snapshot(now_ts, stock_symbols, crypto_symbols)
                 data_source = "mock_fallback"
                 mock_fallback_active = True
@@ -713,6 +715,11 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             block_reasons.extend([r for r in watchlist_selector_reasons if r not in block_reasons])
         alert_severity = "HIGH" if "WATCHLIST_SELECTOR_FAILED" in block_reasons else ""
         alert_tag = "WATCHLIST_SELECTOR_FAILED" if "WATCHLIST_SELECTOR_FAILED" in block_reasons else ""
+        if api_fallback_error:
+            append_jsonl(
+                base_dir / "logs" / "violations.log",
+                {"timestamp": ts, "reasons": ["API_FALLBACK"], "error": api_fallback_error},
+            )
 
         update_safe_mode(system_state, violation_reasons, int(config.get("system", {}).get("safe_mode_violation_streak", 3)))
         if violation_reasons:
