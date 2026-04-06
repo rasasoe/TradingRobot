@@ -145,7 +145,11 @@ def build_api_snapshot(base_dir, now_ts: datetime, config: dict[str, Any], stock
             if c > breakout:
                 above_breakout_count += 1
 
-        liq = binance.orderbook_liquidity(sym, timeout, limit=20)
+        ob_key = f"crypto:{sym}:orderbook"
+        liq = get_cached(base_dir, ob_key, ts)
+        if liq is None:
+            liq = binance.orderbook_liquidity(sym, timeout, limit=20)
+            set_cached(base_dir, ob_key, ts, liq)
         snap["crypto"]["market"][sym] = {
             "timestamp": ts,
             "close_time": close_time,

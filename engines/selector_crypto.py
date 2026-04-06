@@ -5,6 +5,22 @@ from typing import Any
 
 from data.providers import binance
 
+_EXCLUDED_BASES = {
+    "USDT",
+    "USDC",
+    "BUSD",
+    "FDUSD",
+    "TUSD",
+    "USDP",
+    "DAI",
+    "USD1",
+    "USDE",
+}
+
+
+def _base_asset(symbol: str, quote: str) -> str:
+    return symbol[: -len(quote)] if symbol.endswith(quote) else symbol
+
 
 def _spread_pct(symbol: str, timeout: float) -> float:
     book = binance.book_ticker(symbol, timeout)
@@ -28,6 +44,9 @@ def select_crypto_watchlist(config: dict[str, Any]) -> list[str]:
     for row in rows:
         symbol = str(row.get("symbol", ""))
         if not symbol.endswith(quote):
+            continue
+        base = _base_asset(symbol, quote)
+        if base.upper() in _EXCLUDED_BASES:
             continue
         qv = float(row.get("quoteVolume", 0.0) or 0.0)
         if qv < min_qv:

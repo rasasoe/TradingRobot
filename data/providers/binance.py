@@ -4,6 +4,8 @@ import json
 from typing import Any
 from urllib.request import Request, urlopen
 
+_CCXT_EXCHANGE = None
+
 
 def _http_json(url: str, timeout: float) -> Any:
     req = Request(url, headers={"User-Agent": "TradingRobot/1.0"})
@@ -31,6 +33,7 @@ def book_ticker(symbol: str, timeout: float) -> dict[str, Any]:
 
 def orderbook_liquidity(symbol: str, timeout: float, limit: int = 20) -> dict[str, float]:
     import ccxt
+    global _CCXT_EXCHANGE
 
     def _to_ccxt_symbol(s: str) -> str:
         if "/" in s:
@@ -41,8 +44,9 @@ def orderbook_liquidity(symbol: str, timeout: float, limit: int = 20) -> dict[st
                 return f"{s[:-len(q)]}/{q}"
         return s
 
-    ex = ccxt.binance({"enableRateLimit": True, "timeout": int(timeout * 1000)})
-    ob = ex.fetch_order_book(_to_ccxt_symbol(symbol), limit=max(20, limit))
+    if _CCXT_EXCHANGE is None:
+        _CCXT_EXCHANGE = ccxt.binance({"enableRateLimit": True, "timeout": int(timeout * 1000)})
+    ob = _CCXT_EXCHANGE.fetch_order_book(_to_ccxt_symbol(symbol), limit=max(20, limit))
     bids = ob.get("bids", []) or []
     asks = ob.get("asks", []) or []
     if not bids or not asks:
