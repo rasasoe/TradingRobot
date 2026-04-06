@@ -9,6 +9,8 @@ def evaluate_enforcement(
     drift_checked: bool,
     capital_event_block: bool,
     pnl_fail_streak: int,
+    watchlist_selector_ok: bool,
+    mock_fallback_active: bool,
 ) -> tuple[bool, list[str], list[str]]:
     block: list[str] = []
     violation: list[str] = []
@@ -25,6 +27,13 @@ def evaluate_enforcement(
     if not drift_checked:
         block.append("DRIFT_STATUS_UNCHECKED")
         violation.append("DRIFT_STATUS_UNCHECKED")
+
+    if not watchlist_selector_ok:
+        block.append("WATCHLIST_SELECTOR_FAILED")
+        violation.append("WATCHLIST_SELECTOR_FAILED")
+
+    if mock_fallback_active:
+        block.append("MOCK_FALLBACK_ACTIVE")
 
     if capital_event_block:
         block.append("CAPITAL_EVENT_CANDLE")

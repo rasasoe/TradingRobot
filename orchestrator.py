@@ -414,26 +414,37 @@ def _drift_state(now_ts: datetime, config: dict[str, Any], trades: list[dict[str
     }
 
 
-def _run_selectors(base_dir: Path, config: dict[str, Any], now_ts: datetime, system_state: dict[str, Any]) -> None:
+def _run_selectors(base_dir: Path, config: dict[str, Any], now_ts: datetime, system_state: dict[str, Any]) -> tuple[bool, list[str]]:
     apply_mode = str(config.get("watchlist", {}).get("apply_mode", "auto"))
+    ok = True
+    reasons: list[str] = []
 
     if should_run_stock_selector(system_state, config, now_ts):
-        picks = select_stock_watchlist(config)
-        save_json_state(base_dir, "watchlist_stock_auto.json", {"timestamp": now_ts.isoformat(), "symbols": picks})
-        system_state["selector_stock_last_run"] = now_ts.isoformat()
-        if apply_mode == "auto":
-            static = list(config.get("static_symbols_stock", []))
-            merged = list(dict.fromkeys(static + picks))[: int(config.get("watchlist", {}).get("stock_max_active", 8))]
-            save_json_state(base_dir, "watchlist_stock_active.json", {"timestamp": now_ts.isoformat(), "symbols": merged})
+        try:
+            picks = select_stock_watchlist(config)
+            save_json_state(base_dir, "watchlist_stock_auto.json", {"timestamp": now_ts.isoformat(), "symbols": picks})
+            system_state["selector_stock_last_run"] = now_ts.isoformat()
+            if apply_mode == "auto":
+                static = list(config.get("static_symbols_stock", []))
+                merged = list(dict.fromkeys(static + picks))[: int(config.get("watchlist", {}).get("stock_max_active", 8))]
+                save_json_state(base_dir, "watchlist_stock_active.json", {"timestamp": now_ts.isoformat(), "symbols": merged})
+        except Exception:
+            ok = False
+            reasons.append("WATCHLIST_SELECTOR_FAILED")
 
     if should_run_crypto_selector(system_state, config, now_ts):
-        picks = select_crypto_watchlist(config)
-        save_json_state(base_dir, "watchlist_crypto_auto.json", {"timestamp": now_ts.isoformat(), "symbols": picks})
-        system_state["selector_crypto_last_run"] = now_ts.isoformat()
-        if apply_mode == "auto":
-            static = list(config.get("static_symbols_crypto", []))
-            merged = list(dict.fromkeys(static + picks))[: int(config.get("watchlist", {}).get("crypto_max_active", 8))]
-            save_json_state(base_dir, "watchlist_crypto_active.json", {"timestamp": now_ts.isoformat(), "symbols": merged})
+        try:
+            picks = select_crypto_watchlist(config)
+            save_json_state(base_dir, "watchlist_crypto_auto.json", {"timestamp": now_ts.isoformat(), "symbols": picks})
+            system_state["selector_crypto_last_run"] = now_ts.isoformat()
+            if apply_mode == "auto":
+                static = list(config.get("static_symbols_crypto", []))
+                merged = list(dict.fromkeys(static + picks))[: int(config.get("watchlist", {}).get("crypto_max_active", 8))]
+                save_json_state(base_dir, "watchlist_crypto_active.json", {"timestamp": now_ts.isoformat(), "symbols": merged})
+        except Exception:
+            ok = False
+            reasons.append("WATCHLIST_SELECTOR_FAILED")
+    return ok, reasons
 
 
 def _active_symbols(base_dir: Path, config: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -455,6 +466,16 @@ def _capital_event_block(ts: str, events: list[dict[str, Any]]) -> bool:
     return any(str(e.get("timestamp", ""))[:16] == key for e in events)
 
 
+def _crypto_close_time_sync(snapshot: dict[str, Any]) -> bool:
+    btc_ct = snapshot.get("crypto", {}).get("btc", {}).get("close_time")
+    if btc_ct is None:
+        return False
+    for row in snapshot.get("crypto", {}).get("market", {}).values():
+        if row.get("close_time") != btc_ct:
+            return False
+    return True
+
+
 def _signal_alert_text(sig: dict[str, Any], status: str) -> str:
     action = sig.get("action", "unknown")
     side = sig.get("side", "unknown")
@@ -467,6 +488,15 @@ def _signal_alert_text(sig: dict[str, Any], status: str) -> str:
         f"점수: {sig.get('score',0.0)}\n"
         f"상태: {status}"
     )
+
+
+def _external_report_text(kind: str, asset: str = "", reason: str = "", regime: str = "") -> str:
+    if kind == "NO_SIGNAL":
+        regime_kr = "리스크 온" if "ON" in regime.upper() else "리스크 오프"
+        return f"신호 없음\n레짐: {regime_kr}\n동작: 없음"
+    if kind == "BUY":
+        return f"실행 필요\n유형: 매수\n자산: {asset}\n사이즈: 1R\n사유: {reason}"
+    return f"실행 필요\n유형: 매도\n자산: {asset}\n사유: {reason}"
 
 
 def _portfolio_summary_text(portfolio: dict[str, Any], performance: dict[str, Any]) -> str:
@@ -528,11 +558,12 @@ def _notify(
     sent = 0
     seen = set(alert_state.get("seen", []))
 
+    regime = "Risk OFF" if not allow_new_entries else "Risk ON"
     if reasons and bool(notif_cfg.get("send_system_alerts", True)):
-        if router.send("[시스템 경고]\n사유: " + "|".join(reasons)):
+        if router.send("[SYSTEM]\n" + "|".join(reasons)):
             sent += 1
 
-    if bool(notif_cfg.get("send_signal_alerts", True)):
+    if bool(notif_cfg.get("send_signal_alerts", True)) and signals:
         for sig in signals:
             candle_ts = str(sig.get("timestamp", ts))[:16]
             strategy = str(sig.get("strategy", sig.get("signal_type", "unknown")))
@@ -540,10 +571,15 @@ def _notify(
             h = hashlib.sha256(key.encode("utf-8")).hexdigest()
             if h in seen:
                 continue
-            status = "candidate" if allow_new_entries or sig.get("action") == "exit" else f"blocked:{block_reason or 'fail_closed'}"
-            if router.send(_signal_alert_text(sig, status)):
+            action = str(sig.get("action", "")).lower()
+            kind = "BUY" if action == "enter" else "SELL"
+            txt = _external_report_text(kind, asset=str(sig.get("asset", "")), reason=str(sig.get("reason", "")), regime=regime)
+            if router.send(txt):
                 sent += 1
                 seen.add(h)
+    elif bool(notif_cfg.get("send_signal_alerts", True)):
+        if router.send(_external_report_text("NO_SIGNAL", regime=regime)):
+            sent += 1
 
     if bool(notif_cfg.get("send_risk_alerts", True)):
         prev = str(alert_state.get("last_risk_warning_state", ""))
@@ -592,10 +628,11 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
         trades = load_trades(base_dir)
         pending_orders = load_pending_orders(base_dir)
 
-        _run_selectors(base_dir, config, now_ts, system_state)
+        watchlist_selector_ok, watchlist_selector_reasons = _run_selectors(base_dir, config, now_ts, system_state)
         stock_symbols, crypto_symbols = _active_symbols(base_dir, config)
 
         data_source = str(config.get("data", {}).get("source", "mock")).lower()
+        mock_fallback_active = False
         snapshot: dict[str, Any]
         if data_source == "api":
             try:
@@ -606,12 +643,27 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
                     raise
                 snapshot = make_mock_snapshot(now_ts, stock_symbols, crypto_symbols)
                 data_source = "mock_fallback"
+                mock_fallback_active = True
         else:
             snapshot = make_mock_snapshot(now_ts, stock_symbols, crypto_symbols)
             data_source = "mock"
+            mock_fallback_active = True
 
         ts = snapshot["timestamp"]
         prices = _collect_prices(snapshot)
+
+        # Tag role fixed mapping / external handling.
+        for asset, pos in list(positions.items()):
+            role = str(pos.get("role", "")).lower()
+            if asset == "BTCUSDT":
+                pos["role"] = "regime_anchor"
+            elif asset == "SOLUSDT":
+                pos["role"] = "core"
+            elif role in {"", "none"}:
+                pos["role"] = "external"
+            elif role not in {"core", "leader", "alpha", "quarantine", "external", "regime_anchor"}:
+                pos["role"] = "external"
+            positions[asset] = pos
 
         stock_signals = run_stock_engine(snapshot, config, stock_symbols)
         crypto_signals = run_crypto_engine(snapshot, config, crypto_symbols, system_state.get("disabled_strategies", []))
@@ -625,7 +677,7 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
         else:
             system_state["pnl_log_fail_streak"] = int(system_state.get("pnl_log_fail_streak", 0)) + 1
 
-        time_sync_ok = validate_snapshot_sync(snapshot)
+        time_sync_ok = validate_snapshot_sync(snapshot) and _crypto_close_time_sync(snapshot)
         capital_event_block = _capital_event_block(ts, load_capital_events(base_dir))
 
         allow_from_enforcement, block_reasons, violation_reasons = evaluate_enforcement(
@@ -634,7 +686,13 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             drift_checked=bool(drift.get("checked", False)),
             capital_event_block=capital_event_block,
             pnl_fail_streak=int(system_state.get("pnl_log_fail_streak", 0)),
+            watchlist_selector_ok=watchlist_selector_ok,
+            mock_fallback_active=mock_fallback_active,
         )
+        if watchlist_selector_reasons:
+            block_reasons.extend([r for r in watchlist_selector_reasons if r not in block_reasons])
+        alert_severity = "HIGH" if "WATCHLIST_SELECTOR_FAILED" in block_reasons else ""
+        alert_tag = "WATCHLIST_SELECTOR_FAILED" if "WATCHLIST_SELECTOR_FAILED" in block_reasons else ""
 
         update_safe_mode(system_state, violation_reasons, int(config.get("system", {}).get("safe_mode_violation_streak", 3)))
         if violation_reasons:
@@ -701,6 +759,8 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             allow_new_entries=allow_new_entries,
             block_reason=block_reason,
             safe_mode=bool(system_state.get("safe_mode", False)),
+            alert_severity=alert_severity,
+            alert_tag=alert_tag,
         )
 
         if not all_signals:

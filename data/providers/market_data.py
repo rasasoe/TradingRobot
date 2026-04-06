@@ -117,10 +117,16 @@ def build_api_snapshot(base_dir, now_ts: datetime, config: dict[str, Any], stock
             set_cached(base_dir, key, ts, kl)
         if not kl:
             raise ValueError(f"missing_crypto:{sym}")
-        closes = [float(x[4]) for x in kl]
-        highs = [float(x[2]) for x in kl]
-        lows = [float(x[3]) for x in kl]
-        vols = [float(x[5]) for x in kl]
+        if len(kl) < 25:
+            raise ValueError(f"insufficient_crypto:{sym}")
+
+        # Closed-candle only: drop the latest forming candle.
+        closed = kl[:-1]
+        closes = [float(x[4]) for x in closed]
+        highs = [float(x[2]) for x in closed]
+        lows = [float(x[3]) for x in closed]
+        vols = [float(x[5]) for x in closed]
+        close_time = int(closed[-1][6])
 
         close = closes[-1]
         atr = mean([max(0.0, h - l) for h, l in zip(highs[-14:], lows[-14:])]) if len(highs) >= 14 else max(1.0, close * 0.01)
@@ -139,8 +145,10 @@ def build_api_snapshot(base_dir, now_ts: datetime, config: dict[str, Any], stock
             if c > breakout:
                 above_breakout_count += 1
 
+        liq = binance.orderbook_liquidity(sym, timeout, limit=20)
         snap["crypto"]["market"][sym] = {
             "timestamp": ts,
+            "close_time": close_time,
             "close": round(close, 4),
             "atr": round(float(max(0.01, atr)), 4),
             "volume": round(float(vols[-1]), 4),
@@ -151,16 +159,27 @@ def build_api_snapshot(base_dir, now_ts: datetime, config: dict[str, Any], stock
             "prev_close": round(float(prev_close), 4),
             "candle_change_pct": round(float(candle_chg * 100), 4),
             "above_breakout_count": int(above_breakout_count),
-            "orderbook": {"top3_ratio": 0.1, "spread_pct": 0.1},
+            "orderbook": {
+                "best_bid": round(float(liq["best_bid"]), 8),
+                "best_ask": round(float(liq["best_ask"]), 8),
+                "midpoint": round(float(liq["midpoint"]), 8),
+                "spread_pct": round(float(liq["spread_pct"]), 6),
+                "top3_ratio": round(float(liq["top3_ratio"]), 6),
+            },
         }
 
     btc_daily = binance.klines("BTCUSDT", "1d", int(config.get("backfill", {}).get("crypto_dma_days", 220)), timeout)
     if not btc_daily:
         raise ValueError("missing_btc_daily")
-    btc_closes = [float(x[4]) for x in btc_daily]
+    if len(btc_daily) < 205:
+        raise ValueError("insufficient_btc_daily")
+    # Closed-candle only for regime.
+    btc_closed = btc_daily[:-1]
+    btc_closes = [float(x[4]) for x in btc_closed]
     btc_close = btc_closes[-1]
+    btc_close_time = int(btc_closed[-1][6])
     dma_len = min(200, len(btc_closes))
     btc_dma = mean(btc_closes[-dma_len:])
-    snap["crypto"]["btc"] = {"close": round(btc_close, 4), "dma200": round(float(btc_dma), 4)}
+    snap["crypto"]["btc"] = {"close": round(btc_close, 4), "dma200": round(float(btc_dma), 4), "close_time": btc_close_time}
 
     return snap

@@ -14,6 +14,8 @@ def apply_qam_policy(
     allow_new_entries: bool,
     block_reason: str,
     safe_mode: bool,
+    alert_severity: str = "",
+    alert_tag: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     # Always keep protection/exit signals
     forced_management = [s for s in management_signals if s.get("action") in {"exit", "reduce"}]
@@ -30,6 +32,8 @@ def apply_qam_policy(
             "mgmt_in": len(management_signals),
             "out": len(final),
             "reason": block_reason or "blocked_by_policy",
+            "alert_severity": alert_severity,
+            "alert_tag": alert_tag,
         }
         append_jsonl(base_dir / "logs" / "qam_decision.log", decision)
         return final, decision
@@ -59,6 +63,8 @@ def apply_qam_policy(
         "mgmt_in": len(management_signals),
         "out": len(final),
         "reason": "qam_policy_applied",
+        "alert_severity": alert_severity,
+        "alert_tag": alert_tag,
     }
     append_jsonl(base_dir / "logs" / "qam_decision.log", decision)
     return final, decision

@@ -14,6 +14,7 @@ def _price(base: float, s: int, scale: float) -> float:
 
 def make_mock_snapshot(now_ts: datetime, stock_symbols: list[str], crypto_symbols: list[str]) -> dict[str, Any]:
     ts = now_ts.replace(second=0, microsecond=0, tzinfo=timezone.utc).isoformat()
+    close_time_ms = int(now_ts.replace(second=0, microsecond=0, tzinfo=timezone.utc).timestamp() * 1000)
 
     stock_market: dict[str, Any] = {}
     for sym in stock_symbols:
@@ -48,8 +49,14 @@ def make_mock_snapshot(now_ts: datetime, stock_symbols: list[str], crypto_symbol
         close = _price(base, s, 0.7 if "BTC" in sym else 0.09)
         atr = max(0.5, close * 0.012)
         prev_close = round(close * 0.998, 4)
+        best_bid = round(close * 0.9995, 4)
+        best_ask = round(close * 1.0005, 4)
+        midpoint = round((best_bid + best_ask) / 2, 4)
+        spread_pct = round(((best_ask - best_bid) / midpoint) * 100, 6) if midpoint else 100.0
+        top3_ratio = round(0.12 + ((s % 7) * 0.005), 6)
         crypto_market[sym] = {
             "timestamp": ts,
+            "close_time": close_time_ms,
             "close": round(close, 4),
             "atr": round(atr, 4),
             "volume": 1000 + (s % 400),
@@ -60,7 +67,13 @@ def make_mock_snapshot(now_ts: datetime, stock_symbols: list[str], crypto_symbol
             "prev_close": prev_close,
             "candle_change_pct": round(((close - prev_close) / prev_close) * 100, 4),
             "above_breakout_count": 3,
-            "orderbook": {"top3_ratio": 0.1, "spread_pct": 0.1},
+            "orderbook": {
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "midpoint": midpoint,
+                "spread_pct": spread_pct,
+                "top3_ratio": top3_ratio,
+            },
         }
 
     btc_close = crypto_market.get("BTCUSDT", {"close": 65000.0})["close"]
@@ -73,7 +86,7 @@ def make_mock_snapshot(now_ts: datetime, stock_symbols: list[str], crypto_symbol
             "spy": {"close": spy_close, "sma50": round(spy_close * 0.995, 4), "sma200": round(spy_close * 0.97, 4), "momentum": 0.01},
             "vix": {"value": vix_val, "prev": round(vix_val + 1.5, 4)},
         },
-        "crypto": {"timestamp": ts, "market": crypto_market, "btc": {"close": btc_close, "dma200": round(btc_close * 0.99, 4)}},
+        "crypto": {"timestamp": ts, "market": crypto_market, "btc": {"close": btc_close, "dma200": round(btc_close * 0.99, 4), "close_time": close_time_ms}},
     }
 
 

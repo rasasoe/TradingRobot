@@ -64,6 +64,7 @@ selector:
 execution:
   spread_limit_pct: 0.5
   top3_orderbook_ratio_limit: 0.2
+  slippage_warn_pct: 0.3
 
 backfill:
   stock_sma_days: 60
