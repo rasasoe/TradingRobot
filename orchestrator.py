@@ -467,10 +467,13 @@ def _capital_event_block(ts: str, events: list[dict[str, Any]]) -> bool:
 
 
 def _crypto_close_time_sync(snapshot: dict[str, Any]) -> bool:
-    btc_ct = snapshot.get("crypto", {}).get("btc", {}).get("close_time")
+    market = snapshot.get("crypto", {}).get("market", {})
+    btc_ct = market.get("BTCUSDT", {}).get("close_time")
+    if btc_ct is None:
+        btc_ct = snapshot.get("crypto", {}).get("btc", {}).get("close_time")
     if btc_ct is None:
         return False
-    for row in snapshot.get("crypto", {}).get("market", {}).values():
+    for row in market.values():
         if row.get("close_time") != btc_ct:
             return False
     return True

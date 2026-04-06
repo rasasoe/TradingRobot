@@ -177,9 +177,17 @@ def build_api_snapshot(base_dir, now_ts: datetime, config: dict[str, Any], stock
     btc_closed = btc_daily[:-1]
     btc_closes = [float(x[4]) for x in btc_closed]
     btc_close = btc_closes[-1]
-    btc_close_time = int(btc_closed[-1][6])
+    btc_daily_close_time = int(btc_closed[-1][6])
+    btc_sync_close_time = int(snap["crypto"]["market"].get("BTCUSDT", {}).get("close_time", btc_daily_close_time))
     dma_len = min(200, len(btc_closes))
     btc_dma = mean(btc_closes[-dma_len:])
-    snap["crypto"]["btc"] = {"close": round(btc_close, 4), "dma200": round(float(btc_dma), 4), "close_time": btc_close_time}
+    snap["crypto"]["btc"] = {
+        "close": round(btc_close, 4),
+        "dma200": round(float(btc_dma), 4),
+        # close_time for time-sync must match the market candle timeframe (1m closed candle).
+        "close_time": btc_sync_close_time,
+        # keep daily close time separately for diagnostics.
+        "regime_close_time": btc_daily_close_time,
+    }
 
     return snap
