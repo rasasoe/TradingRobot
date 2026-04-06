@@ -479,6 +479,28 @@ def _crypto_close_time_sync(snapshot: dict[str, Any]) -> bool:
     return True
 
 
+def _filter_crypto_time_mismatches(snapshot: dict[str, Any], crypto_symbols: list[str]) -> tuple[list[str], list[str]]:
+    market = snapshot.get("crypto", {}).get("market", {})
+    btc_ct = market.get("BTCUSDT", {}).get("close_time")
+    if btc_ct is None:
+        btc_ct = snapshot.get("crypto", {}).get("btc", {}).get("close_time")
+    if btc_ct is None:
+        return crypto_symbols, []
+
+    keep: list[str] = []
+    mismatched: list[str] = []
+    for sym in crypto_symbols:
+        row = market.get(sym)
+        if not row:
+            mismatched.append(sym)
+            continue
+        if row.get("close_time") == btc_ct:
+            keep.append(sym)
+        else:
+            mismatched.append(sym)
+    return keep, mismatched
+
+
 def _signal_alert_text(sig: dict[str, Any], status: str) -> str:
     action = sig.get("action", "unknown")
     side = sig.get("side", "unknown")
@@ -675,6 +697,23 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             mock_fallback_active = True
 
         ts = snapshot["timestamp"]
+        synced_crypto_symbols, crypto_time_mismatches = _filter_crypto_time_mismatches(snapshot, crypto_symbols)
+        if crypto_time_mismatches:
+            crypto_symbols = synced_crypto_symbols
+            save_json_state(
+                base_dir,
+                "watchlist_crypto_active.json",
+                {"timestamp": ts, "symbols": crypto_symbols},
+            )
+            append_jsonl(
+                base_dir / "logs" / "violations.log",
+                {
+                    "timestamp": ts,
+                    "reasons": ["TIME_SYNC_SYMBOLS_EXCLUDED"],
+                    "excluded_symbols": crypto_time_mismatches,
+                    "active_symbols": crypto_symbols,
+                },
+            )
         prices = _collect_prices(snapshot)
 
         # Tag role fixed mapping / external handling.
@@ -702,7 +741,14 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
         else:
             system_state["pnl_log_fail_streak"] = int(system_state.get("pnl_log_fail_streak", 0)) + 1
 
-        time_sync_ok = validate_snapshot_sync(snapshot) and _crypto_close_time_sync(snapshot)
+        time_sync_ok = validate_snapshot_sync(snapshot) and _crypto_close_time_sync(
+            {
+                "crypto": {
+                    "market": {k: snapshot.get("crypto", {}).get("market", {}).get(k, {}) for k in crypto_symbols},
+                    "btc": snapshot.get("crypto", {}).get("btc", {}),
+                }
+            }
+        )
         capital_event_block = _capital_event_block(ts, load_capital_events(base_dir))
 
         allow_from_enforcement, block_reasons, violation_reasons = evaluate_enforcement(

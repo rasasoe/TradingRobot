@@ -135,6 +135,22 @@ def test_watchlist_selector_generation(tmp_path: Path, monkeypatch) -> None:
     assert "BTCUSDT" in crypto_active["symbols"]
 
 
+def test_crypto_time_mismatch_symbols_are_auto_excluded() -> None:
+    snapshot = {
+        "crypto": {
+            "btc": {"close_time": 100},
+            "market": {
+                "BTCUSDT": {"close_time": 100},
+                "ETHUSDT": {"close_time": 100},
+                "DOGEUSDT": {"close_time": 99},
+            },
+        }
+    }
+    keep, mismatched = orchestrator._filter_crypto_time_mismatches(snapshot, ["BTCUSDT", "ETHUSDT", "DOGEUSDT"])
+    assert keep == ["BTCUSDT", "ETHUSDT"]
+    assert mismatched == ["DOGEUSDT"]
+
+
 def test_recovery_state_load_and_reconcile(tmp_path: Path) -> None:
     base = _prepare_base(tmp_path)
     stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
