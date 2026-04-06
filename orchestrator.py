@@ -16,7 +16,7 @@ from engines.drift import evaluate_drift
 from engines.selector_crypto import select_crypto_watchlist, should_run_crypto_selector
 from engines.selector_stock import select_stock_watchlist, should_run_stock_selector
 from engines.stock_engine import run_stock_engine
-from execution.executor import execute_orders
+from execution.executor import execute_orders, idempotency_key
 from notifications.router import NotificationRouter
 from ops.log_rotate import rotate_logs
 from risk.enforcement import evaluate_enforcement
@@ -510,6 +510,15 @@ def _portfolio_summary_text(portfolio: dict[str, Any], performance: dict[str, An
     )
 
 
+def _portfolio_brief_text(portfolio: dict[str, Any], performance: dict[str, Any]) -> str:
+    return (
+        "[체결 스냅샷]\n"
+        f"총 포지션: {portfolio.get('total_positions',0)}\n"
+        f"누적수익률: {performance.get('return_pct', 0.0)}%\n"
+        f"총손익: {performance.get('total_pnl', 0.0)}"
+    )
+
+
 def _format_qam_signal(
     mode_status: str,
     stock_regime: str,
@@ -552,6 +561,7 @@ def _notify(
     alert_state: dict[str, Any],
     portfolio: dict[str, Any],
     performance: dict[str, Any],
+    filled_signals: list[dict[str, Any]],
 ) -> int:
     router = NotificationRouter(config)
     notif_cfg = config.get("notifications", {}).get("telegram", {})
@@ -591,9 +601,14 @@ def _notify(
                 sent += 1
             alert_state["last_risk_warning_state"] = cur
 
+    if bool(notif_cfg.get("send_fill_snapshot", True)) and filled_signals:
+        fills = ", ".join([f"{str(s.get('asset',''))}:{str(s.get('action','')).upper()}" for s in filled_signals[:8]])
+        if router.send(f"[체결 완료]\n{fills}\n" + _portfolio_brief_text(portfolio, performance)):
+            sent += 1
+
     if bool(notif_cfg.get("send_portfolio_summary", True)):
         interval_min = int(notif_cfg.get("portfolio_summary_interval_minutes", 60))
-        send_on_signal = bool(notif_cfg.get("portfolio_summary_on_signal", True))
+        send_on_signal = bool(notif_cfg.get("portfolio_summary_on_signal", False))
         last_iso = alert_state.get("last_portfolio_summary_ts")
         should_send = bool(send_on_signal and has_trade_signal)
         if not should_send:
@@ -797,6 +812,19 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             block_reason=block_reason,
         )
         pending_orders.extend(newly_filled)
+        signal_by_hash: dict[str, dict[str, Any]] = {}
+        for sig in all_signals:
+            try:
+                signal_by_hash[idempotency_key(sig)] = sig
+            except Exception:
+                continue
+        filled_signals: list[dict[str, Any]] = []
+        for row in newly_filled:
+            if str(row.get("status", "")) != "filled":
+                continue
+            sig = signal_by_hash.get(str(row.get("signal_hash", "")))
+            if sig:
+                filled_signals.append(sig)
 
         system_state["last_heartbeat"] = ts
 
@@ -829,6 +857,7 @@ def run_once(base_dir: Path, config_rel_path: str = "config/config.yaml", emit_s
             alert_state=alert_state,
             portfolio=portfolio,
             performance=perf,
+            filled_signals=filled_signals,
         )
 
         save_positions(base_dir, positions)
